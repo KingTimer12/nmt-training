@@ -6,8 +6,11 @@ use burn::{
     record::CompactRecorder,
     tensor::backend::AutodiffBackend,
     train::{
-        Learner, SupervisedTraining,
-        metric::{AccuracyMetric, LossMetric, PerplexityMetric},
+        Learner, MetricEarlyStoppingStrategy, StoppingCondition, SupervisedTraining,
+        metric::{
+            AccuracyMetric, LossMetric, PerplexityMetric,
+            store::{Aggregate, Direction, Split},
+        },
     },
 };
 
@@ -31,6 +34,9 @@ pub struct TrainingConfig {
     pub seed: u64,
     #[config(default = 1.0e-4)]
     pub learning_rate: f64,
+    /// Stop when the validation loss has not improved for this many epochs.
+    #[config(default = 5)]
+    pub early_stopping_patience: usize,
 }
 
 pub fn train<B: AutodiffBackend>(artifact_dir: &str, config: TrainingConfig, device: B::Device) {
@@ -62,6 +68,15 @@ pub fn train<B: AutodiffBackend>(artifact_dir: &str, config: TrainingConfig, dev
             PerplexityMetric::new(),
         ))
         .with_file_checkpointer(CompactRecorder::new())
+        .early_stopping(MetricEarlyStoppingStrategy::new(
+            &LossMetric::<B>::new(),
+            Aggregate::Mean,
+            Direction::Lowest,
+            Split::Valid,
+            StoppingCondition::NoImprovementSince {
+                n_epochs: config.early_stopping_patience,
+            },
+        ))
         .num_epochs(config.num_epochs)
         .summary();
 

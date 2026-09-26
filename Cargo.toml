@@ -4,11 +4,31 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-burn = { version = "0.21.0", features = ["std", "tui", "fusion", "dataset", "ndarray", "wgpu", "train"], default-features = false }
+burn = { version = "0.21.0", features = ["std", "tui", "fusion", "dataset", "ndarray", "wgpu", "train", "autotune", "simd"], default-features = false }
 rwkv-tokenizer = "0.9.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 unicode-normalization = "0.1.25"
+# Not used directly: re-enables its defaults (SIMD + rayon multi-threading) for the CPU
+# fallback, which `burn`'s `default-features = false` turns off.
+burn-ndarray = "0.21.0"
+
+# GPU backends shipped in the Linux executable. Driver libraries are loaded at runtime,
+# so the binary builds without CUDA/ROCm installed and still runs on machines lacking them.
+[target.'cfg(target_os = "linux")'.dependencies]
+burn = { version = "0.21.0", features = ["cuda", "rocm"], default-features = false }
+
+[features]
+# Embed corpus + vocab in the binary and run relative to the executable's directory.
+bundle = []
+
+[profile.release]
+strip = true
+# Cross-crate inlining into burn/cubecl: cuts CPU-side overhead (autodiff graph, fusion,
+# dataloader, ndarray kernels). Slower builds. Keep `panic = "unwind"`: backend probing
+# relies on `catch_unwind`.
+lto = "fat"
+codegen-units = 1
 
 [profile.dev]
 opt-level = 3
