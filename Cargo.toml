@@ -1,0 +1,14 @@
+[package]
+name = "neural-machine-translation"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+burn = { version = "0.21.0", features = ["std", "tui", "fusion", "dataset", "ndarray", "wgpu", "train"], default-features = false }
+rwkv-tokenizer = "0.9.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+unicode-normalization = "0.1.25"
+
+[profile.dev]
+opt-level = 3
