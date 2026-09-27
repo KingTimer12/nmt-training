@@ -84,49 +84,59 @@ fn detect_vendors() -> Vendors {
     v
 }
 
-/// Runs a tiny computation on `device`; `false` if the backend panics (missing driver,
-/// missing runtime library, no adapter, ...). The panic message is suppressed.
-fn probe<B: Backend>(device: &B::Device) -> bool {
+/// Runs a tiny computation on `device`. Fails with the panic message if the backend is
+/// unusable (missing driver, missing runtime library, no adapter, ...). The default panic
+/// output is suppressed; callers decide whether to print the reason.
+fn probe<B: Backend>(device: &B::Device) -> Result<(), String> {
     let hook = panic::take_hook();
     panic::set_hook(Box::new(|_| {}));
-    let ok = panic::catch_unwind(AssertUnwindSafe(|| {
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
         let t = Tensor::<B, 1>::ones([8], device);
         let sum: f32 = t.sum().into_scalar().elem();
-        (sum - 8.0).abs() < 1e-3
-    }))
-    .unwrap_or(false);
+        sum
+    }));
     panic::set_hook(hook);
-    ok
+    match result {
+        Ok(sum) if (sum - 8.0).abs() < 1e-3 => Ok(()),
+        Ok(sum) => Err(format!("probe computed a wrong result ({sum} instead of 8)")),
+        Err(payload) => Err(payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_else(|| "unknown panic".to_string())),
+    }
 }
 
-fn try_cuda() -> Option<Selected> {
+fn try_cuda() -> Result<Selected, String> {
     #[cfg(target_os = "linux")]
     {
         let device = CudaDevice::default();
-        if probe::<Cuda<f32, i32>>(&device) {
-            return Some(Selected::Cuda(device));
-        }
+        probe::<Cuda<f32, i32>>(&device).map(|()| Selected::Cuda(device))
     }
-    None
+    #[cfg(not(target_os = "linux"))]
+    Err("CUDA backend is only built for Linux".to_string())
 }
 
-fn try_rocm() -> Option<Selected> {
+fn try_rocm() -> Result<Selected, String> {
     #[cfg(target_os = "linux")]
     {
         let device = RocmDevice::default();
-        if probe::<Rocm<f32, i32>>(&device) {
-            return Some(Selected::Rocm(device));
-        }
+        probe::<Rocm<f32, i32>>(&device).map(|()| Selected::Rocm(device))
     }
-    None
+    #[cfg(not(target_os = "linux"))]
+    Err("ROCm backend is only built for Linux".to_string())
 }
 
-fn try_wgpu() -> Option<Selected> {
+fn try_wgpu() -> Result<Selected, String> {
     // Only real GPUs: a software (CPU) adapter would be slower than ndarray.
-    [WgpuDevice::DiscreteGpu(0), WgpuDevice::IntegratedGpu(0)]
-        .into_iter()
-        .find(|d| probe::<Wgpu<f32, i32>>(d))
-        .map(Selected::Wgpu)
+    let mut last_err = String::new();
+    for device in [WgpuDevice::DiscreteGpu(0), WgpuDevice::IntegratedGpu(0)] {
+        match probe::<Wgpu<f32, i32>>(&device) {
+            Ok(()) => return Ok(Selected::Wgpu(device)),
+            Err(e) => last_err = e,
+        }
+    }
+    Err(last_err)
 }
 
 pub fn select() -> Selected {
@@ -136,33 +146,37 @@ pub fn select() -> Selected {
             "cuda" => try_cuda(),
             "rocm" | "hip" => try_rocm(),
             "wgpu" | "vulkan" => try_wgpu(),
-            "cpu" | "ndarray" => Some(Selected::Cpu),
+            "cpu" | "ndarray" => Ok(Selected::Cpu),
             other => panic!("NMT_BACKEND={other} is invalid (use cuda|rocm|wgpu|cpu)"),
         };
-        return chosen.unwrap_or_else(|| panic!("NMT_BACKEND={forced} requested but unavailable"));
+        return chosen
+            .unwrap_or_else(|e| panic!("NMT_BACKEND={forced} requested but unavailable:
+{e}"));
     }
 
     let vendors = detect_vendors();
     println!("Detected GPU vendors: {vendors:?}");
 
     if vendors.nvidia {
-        if let Some(s) = try_cuda() {
-            return s;
+        match try_cuda() {
+            Ok(s) => return s,
+            Err(e) => println!("NVIDIA GPU found but CUDA is unavailable:
+{e}"),
         }
-        println!("NVIDIA GPU found but CUDA is unavailable (driver/libnvrtc missing?)");
     }
     if vendors.amd {
-        if let Some(s) = try_rocm() {
-            return s;
+        match try_rocm() {
+            Ok(s) => return s,
+            Err(e) => println!("AMD GPU found but ROCm is unavailable:
+{e}"),
         }
-        println!("AMD GPU found but ROCm is unavailable (libamdhip64 missing?)");
     }
     // wgpu is also tried with no detected vendor: sysfs may be hidden (containers).
-    if let Some(s) = try_wgpu() {
-        return s;
-    }
-    if vendors.any() {
-        println!("GPU found but no usable backend (Vulkan driver missing?)");
+    match try_wgpu() {
+        Ok(s) => return s,
+        Err(e) if vendors.any() => println!("GPU found but wgpu/Vulkan is unavailable:
+{e}"),
+        Err(_) => {}
     }
     Selected::Cpu
 }
