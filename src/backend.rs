@@ -9,6 +9,7 @@
 
 use std::fmt;
 use std::panic::{self, AssertUnwindSafe};
+use std::sync::{Arc, Mutex};
 
 use burn::backend::wgpu::WgpuDevice;
 use burn::backend::Wgpu;
@@ -84,26 +85,44 @@ fn detect_vendors() -> Vendors {
     v
 }
 
-/// Runs a tiny computation on `device`. Fails with the panic message if the backend is
-/// unusable (missing driver, missing runtime library, no adapter, ...). The default panic
-/// output is suppressed; callers decide whether to print the reason.
-fn probe<B: Backend>(device: &B::Device) -> Result<(), String> {
+/// Runs `f`, turning a panic into `Err` with the messages of every panic raised meanwhile.
+///
+/// cubecl drives each device from its own thread: the root cause usually panics *there*
+/// and the calling thread only sees a closed channel (`CallError`). The temporary hook
+/// therefore records panics from every thread instead of printing them.
+fn capture_panics<R>(f: impl FnOnce() -> R) -> Result<R, String> {
+    let captured = Arc::new(Mutex::new(Vec::<String>::new()));
     let hook = panic::take_hook();
-    panic::set_hook(Box::new(|_| {}));
-    let result = panic::catch_unwind(AssertUnwindSafe(|| {
-        let t = Tensor::<B, 1>::ones([8], device);
-        let sum: f32 = t.sum().into_scalar().elem();
-        sum
-    }));
+    {
+        let captured = Arc::clone(&captured);
+        panic::set_hook(Box::new(move |info| {
+            let thread = std::thread::current();
+            let name = thread.name().unwrap_or("<unnamed>");
+            if let Ok(mut c) = captured.lock() {
+                c.push(format!("[thread '{name}'] {info}"));
+            }
+        }));
+    }
+    let result = panic::catch_unwind(AssertUnwindSafe(f));
     panic::set_hook(hook);
-    match result {
-        Ok(sum) if (sum - 8.0).abs() < 1e-3 => Ok(()),
-        Ok(sum) => Err(format!("probe computed a wrong result ({sum} instead of 8)")),
-        Err(payload) => Err(payload
-            .downcast_ref::<String>()
-            .cloned()
-            .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
-            .unwrap_or_else(|| "unknown panic".to_string())),
+    result.map_err(|_| {
+        let captured = captured.lock().map(|c| c.join("
+")).unwrap_or_default();
+        if captured.is_empty() { "unknown panic".to_string() } else { captured }
+    })
+}
+
+/// Runs a tiny computation on `device`. Fails with the panic messages if the backend is
+/// unusable (missing driver, missing runtime library, no adapter, ...).
+fn probe<B: Backend>(device: &B::Device) -> Result<(), String> {
+    let sum = capture_panics(|| {
+        let t = Tensor::<B, 1>::ones([8], device);
+        t.sum().into_scalar().elem::<f32>()
+    })?;
+    if (sum - 8.0).abs() < 1e-3 {
+        Ok(())
+    } else {
+        Err(format!("probe computed a wrong result ({sum} instead of 8)"))
     }
 }
 
@@ -179,4 +198,29 @@ pub fn select() -> Selected {
         Err(_) => {}
     }
     Selected::Cpu
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_panics_reports_worker_thread_cause() {
+        let err = capture_panics(|| {
+            let worker = std::thread::Builder::new()
+                .name("device".into())
+                .spawn(|| panic!("libnvrtc not found"))
+                .unwrap();
+            worker.join().map_err(|_| "CallError").unwrap()
+        })
+        .unwrap_err();
+        assert!(err.contains("[thread 'device']"), "{err}");
+        assert!(err.contains("libnvrtc not found"), "{err}");
+        assert!(err.contains("CallError"), "{err}");
+    }
+
+    #[test]
+    fn capture_panics_passes_through_value() {
+        assert_eq!(capture_panics(|| 42), Ok(42));
+    }
 }
