@@ -17,10 +17,13 @@ env:
   # The driver libraries (libcuda, libnvrtc) are loaded dynamically at runtime.
   CUDARC_CUDA_VERSION: "12080"
   BIN_NAME: neural-machine-translation
+  # Link against an old glibc (via zig) so the binary runs on older distros
+  # (CentOS 7, Ubuntu 16.04+, Debian 9+). Runner's own glibc is irrelevant.
+  GLIBC_VERSION: "2.17"
+  TARGET: x86_64-unknown-linux-gnu
 
 jobs:
   build:
-    # Oldest supported runner -> oldest glibc -> binary runs on more distros.
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -29,16 +32,30 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install zig + cargo-zigbuild
+        run: pip install ziglang
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
       - name: Test
         run: cargo test --locked
 
       - name: Build
-        run: cargo build --release --locked --features bundle
+        run: cargo zigbuild --release --locked --features bundle --target "$TARGET.$GLIBC_VERSION"
+
+      - name: Check glibc requirement
+        run: |
+          BIN="target/$TARGET/release/$BIN_NAME"
+          MAX=$(objdump -T "$BIN" | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' | sort -uV | tail -1)
+          echo "Highest required: $MAX"
+          test "$(printf '%s\n' "$MAX" "GLIBC_$GLIBC_VERSION" | sort -V | tail -1)" = "GLIBC_$GLIBC_VERSION"
 
       - name: Package
         run: |
           mkdir -p dist
-          cp "target/release/$BIN_NAME" "dist/$BIN_NAME"
+          cp "target/$TARGET/release/$BIN_NAME" "dist/$BIN_NAME"
           tar -czf "$BIN_NAME-linux-x86_64.tar.gz" -C dist "$BIN_NAME"
           sha256sum "$BIN_NAME-linux-x86_64.tar.gz" > "$BIN_NAME-linux-x86_64.tar.gz.sha256"
 
