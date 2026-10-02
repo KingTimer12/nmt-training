@@ -3,3 +3,4 @@ mod decoder;
 pub mod train;
 pub mod nmt;
 pub mod config;
+pub mod metrics;

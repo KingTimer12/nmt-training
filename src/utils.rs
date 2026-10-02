@@ -3,7 +3,11 @@ use burn::{
     tensor::{Int, TensorData, backend::Backend},
 };
 
-use crate::{data::{batcher::PaddedBatch, dataset::TranslationItem}, tokenizer::{BOS, EOS, PAD}};
+use crate::data::{
+    batcher::PaddedBatch,
+    dataset::TranslationItem,
+    vocab::{BOS, EOS, PAD, lang_tag},
+};
 
 pub fn int2<B: Backend>(
     v: Vec<i64>,
@@ -26,7 +30,7 @@ pub fn pad_items(items: &[TranslationItem]) -> PaddedBatch {
     let mut tgt_out = Vec::with_capacity(batch_size * tgt_len);
     for it in items {
         let row_start = src.len();
-        src.push(it.tgt_lang.tag() as i64);
+        src.push(lang_tag(it.tgt_lang) as i64);
         src.extend(it.src.iter().map(|&id| id as i64));
         src.push(EOS as i64);
         src.resize(row_start + src_len, pad);

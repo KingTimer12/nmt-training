@@ -1,4 +1,5 @@
 use burn::{
+    backend::NdArray,
     config::Config,
     data::dataloader::DataLoaderBuilder,
     module::Module,
@@ -8,15 +9,18 @@ use burn::{
     train::{
         Learner, MetricEarlyStoppingStrategy, StoppingCondition, SupervisedTraining,
         metric::{
-            AccuracyMetric, LossMetric, PerplexityMetric,
+            LossMetric,
             store::{Aggregate, Direction, Split},
         },
     },
 };
 
 use crate::{
-    data::{batcher::TranslationBatcher, dataset::TranslationDataset},
-    model::config::NMTConfig,
+    data::{batcher::TranslationBatcher, dataset::Corpus},
+    model::{
+        config::NMTConfig,
+        metrics::{PerplexityMetric, TokenAccuracyMetric},
+    },
     utils::create_artifact_dir,
 };
 
@@ -34,37 +38,61 @@ pub struct TrainingConfig {
     pub seed: u64,
     #[config(default = 1.0e-4)]
     pub learning_rate: f64,
+    /// Padded tokens per batch (`rows * longest sequence`) allowed per item of `batch_size`.
+    /// Batches whose sentences are this long or shorter keep all `batch_size` rows; only
+    /// longer ones get fewer, so the largest batch stays as big as a typical random one.
+    #[config(default = 24)]
+    pub tokens_per_item: usize,
     /// Stop when the validation loss has not improved for this many epochs.
     #[config(default = 5)]
     pub early_stopping_patience: usize,
 }
 
-pub fn train<B: AutodiffBackend>(artifact_dir: &str, config: TrainingConfig, device: B::Device) {
+pub fn train<B: AutodiffBackend>(
+    artifact_dir: &str,
+    config: TrainingConfig,
+    corpus: &Corpus,
+    device: B::Device,
+) {
     create_artifact_dir(artifact_dir);
     config
         .save(format!("{artifact_dir}/config.json"))
         .expect("Config should be saved successfully");
+    corpus
+        .vocab
+        .save(format!("{artifact_dir}/vocab.json"))
+        .expect("Vocabulary should be saved successfully");
 
     B::seed(&device, config.seed);
 
     let batcher = TranslationBatcher::default();
 
-    let dataloader_train = DataLoaderBuilder::new(batcher.clone())
-        .batch_size(config.batch_size)
+    let max_tokens = config.batch_size * config.tokens_per_item;
+    // Datasets yield whole length-bucketed batches, hence `batch_size(1)`.
+    let dataloader_train = DataLoaderBuilder::new(batcher)
+        .batch_size(1)
         .shuffle(config.seed)
         .num_workers(config.num_workers)
-        .build(TranslationDataset::train());
+        .build(
+            corpus
+                .train
+                .bucketed(config.batch_size, max_tokens, config.seed),
+        );
 
+    // Validation order does not affect the metrics, so no shuffling.
     let dataloader_test = DataLoaderBuilder::new(batcher)
-        .batch_size(config.batch_size)
-        .shuffle(config.seed)
+        .batch_size(1)
         .num_workers(config.num_workers)
-        .build(TranslationDataset::test());
+        .build(
+            corpus
+                .valid
+                .bucketed(config.batch_size, max_tokens, config.seed),
+        );
 
     let training = SupervisedTraining::new(artifact_dir, dataloader_train, dataloader_test)
         .metrics((
-            AccuracyMetric::new(),
-            LossMetric::new(),
+            TokenAccuracyMetric::new(),
+            LossMetric::<NdArray>::new(),
             PerplexityMetric::new(),
         ))
         .with_file_checkpointer(CompactRecorder::new())

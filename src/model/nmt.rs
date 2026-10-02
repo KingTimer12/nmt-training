@@ -5,10 +5,7 @@ use burn::{
     tensor::{Bool, Float, Int, backend::Backend},
 };
 
-use crate::{
-    model::{decoder::Decoder, encoder::Encoder},
-    tokenizer::PAD,
-};
+use crate::model::{decoder::Decoder, encoder::Encoder};
 
 #[derive(Module, Debug)]
 pub struct NMT<B: Backend> {

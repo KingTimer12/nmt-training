@@ -7,7 +7,7 @@ use burn::tensor::backend::AutodiffBackend;
 
 use crate::backend::Selected;
 use crate::model::config::NMTConfig;
-use crate::tokenizer::VOCAB_SIZE;
+use crate::data::dataset::Corpus;
 use crate::training::{TrainingConfig, train};
 
 mod backend;
@@ -22,7 +22,6 @@ pub mod utils;
 pub const CORPUS: &str = "data/canonical/en-pt_BR/tatoeba.jsonl";
 
 const D_MODEL: usize = 256; // quanto maior, mais pesado e lento será o treinamento, mas melhor será a qualidade da tradução
-const N_EMBEDDINGS: usize = VOCAB_SIZE;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "bundle")]
@@ -48,7 +47,9 @@ const BATCH_SIZES: [usize; 8] = [128, 64, 32, 16, 8, 4, 2, 1];
 
 fn run<B: AutodiffBackend>(device: B::Device) {
     let artifact_dir = "artifacts/en-pt_BR";
-    let model = NMTConfig::new(N_EMBEDDINGS, D_MODEL);
+    // Loaded once and reused by every out-of-memory retry.
+    let corpus = Corpus::load();
+    let model = NMTConfig::new(corpus.vocab.len(), D_MODEL);
     println!("{model}");
     println!("Training on device: {:?}", device);
     println!("Artifact directory: {}", artifact_dir);
@@ -63,11 +64,12 @@ fn run<B: AutodiffBackend>(device: B::Device) {
             num_workers: 4,
             seed: 42,
             learning_rate: 5e-4,
+            tokens_per_item: 24,
             early_stopping_patience: 5,
         };
         let device = device.clone();
         match panic::catch_unwind(AssertUnwindSafe(|| {
-            train::<B>(artifact_dir, config, device)
+            train::<B>(artifact_dir, config, &corpus, device)
         })) {
             Ok(()) => return,
             Err(payload) if is_out_of_memory(payload.as_ref()) => {

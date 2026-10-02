@@ -13,7 +13,8 @@ use burn::data::dataloader::batcher::Batcher;
 use burn::prelude::*;
 
 use super::dataset::TranslationItem;
-use crate::{tokenizer::PAD, utils};
+use super::vocab::PAD;
+use crate::utils;
 
 #[derive(Debug, Clone)]
 pub struct TranslationBatch<B: Backend> {
@@ -51,7 +52,7 @@ impl<B: Backend> Batcher<B, TranslationItem, TranslationBatch<B>> for Translatio
         let src = utils::int2(p.src, p.src_len, p.batch_size, device);
         let tgt_in = utils::int2(p.tgt_in, p.tgt_len, p.batch_size, device);
         let tgt_out = utils::int2(p.tgt_out, p.tgt_len, p.batch_size, device);
-        // Regular tokens are always < PAD, so equality with PAD identifies padding exactly.
+        // PAD never occurs inside a sequence, so equality with PAD identifies padding exactly.
         let src_pad_mask = src.clone().equal_elem(PAD as i64);
         let tgt_pad_mask = tgt_in.clone().equal_elem(PAD as i64);
         TranslationBatch {
@@ -64,10 +65,20 @@ impl<B: Backend> Batcher<B, TranslationItem, TranslationBatch<B>> for Translatio
     }
 }
 
+/// For [`BucketedDataset`](super::dataset::BucketedDataset): each dataset item is already a
+/// whole batch, so the dataloader runs with `batch_size(1)` and we just flatten.
+impl<B: Backend> Batcher<B, Vec<TranslationItem>, TranslationBatch<B>> for TranslationBatcher {
+    fn batch(&self, items: Vec<Vec<TranslationItem>>, device: &B::Device) -> TranslationBatch<B> {
+        let items: Vec<TranslationItem> = items.into_iter().flatten().collect();
+        <Self as Batcher<B, TranslationItem, TranslationBatch<B>>>::batch(self, items, device)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tokenizer::{BOS, EOS, LANG_EN, LANG_PT_BR, Lang};
+    use crate::data::vocab::{BOS, EOS, LANG_EN, LANG_PT_BR};
+    use crate::tokenizer::Lang;
     use burn::backend::NdArray;
 
     type B = NdArray;

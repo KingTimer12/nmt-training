@@ -2,13 +2,11 @@ use burn::{
     Tensor,
     module::Module,
     nn::{
-        Embedding, LayerNorm, PositionalEncoding,
+        LayerNorm,
         transformer::{TransformerDecoder, TransformerDecoderInput},
     },
-    tensor::{Bool, Float, Int, backend::Backend},
+    tensor::{Bool, Float, backend::Backend},
 };
-
-use crate::tokenizer::PAD;
 
 #[derive(Module, Debug)]
 pub struct Decoder<B: Backend> {

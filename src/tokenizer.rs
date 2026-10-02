@@ -49,15 +49,6 @@ impl Lang {
             Lang::ZhHans => "zh_Hans",
         }
     }
-
-    /// The `<2xx>` token prepended to the source to select the target language.
-    pub fn tag(self) -> u16 {
-        match self {
-            Lang::En => LANG_EN,
-            Lang::PtBr => LANG_PT_BR,
-            Lang::ZhHans => LANG_ZH_HANS,
-        }
-    }
 }
 
 pub fn is_special(id: u16) -> bool {
