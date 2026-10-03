@@ -1,4 +1,5 @@
-//! Batcher: pads items and builds encoder/decoder tensors.
+//! Batcher: turns items into encoder/decoder tensors and padding masks. The row layout
+//! itself is built by [`utils::pad_items`].
 //!
 //! For an item `src_lang→tgt_lang` with token IDs `s` and `t`:
 //! ```text
@@ -27,11 +28,12 @@ pub struct TranslationBatch<B: Backend> {
     /// `[batch, tgt_len]`
     pub tgt_out: Tensor<B, 2, Int>,
     /// `[batch, tgt_len]`, `true` where `tgt_in` is `<pad>`. Same positions are `<pad>`
-    /// in `tgt_out`, so it also masks the loss.
+    /// in `tgt_out`; the loss ignores them by checking `tgt_out` for `PAD` directly.
     pub tgt_pad_mask: Tensor<B, 2, Bool>,
 }
 
-/// Padded rows as plain vectors, row-major. Separated from tensor creation so the
+/// Padded rows as plain vectors, row-major, as produced by
+/// [`utils::pad_items`]. Separated from tensor creation so the
 /// layout logic is testable without a backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaddedBatch {
