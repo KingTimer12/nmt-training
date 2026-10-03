@@ -1,11 +1,7 @@
 use burn::{
-    Tensor,
-    module::Module,
-    nn::{
-        LayerNorm,
-        transformer::{TransformerDecoder, TransformerDecoderInput},
-    },
-    tensor::{Bool, Float, backend::Backend},
+    Tensor, module::Module, nn::{
+        LayerNorm, attention::generate_autoregressive_mask, transformer::{TransformerDecoder, TransformerDecoderInput},
+    }, tensor::{Bool, Float, backend::Backend},
 };
 
 #[derive(Module, Debug)]
@@ -29,10 +25,10 @@ impl<B: Backend> Decoder<B> {
         memory: Tensor<B, 3, Float>,
         memory_mask: Tensor<B, 2, Bool>,
     ) -> Tensor<B, 3, Float> {
-        //todos os elementos do tensor que são iguais ao PAD serão true, e os outros false.
-        // let tgt_mask = tgt.equal_elem(PAD);
-        // let memory_mask = src.equal_elem(PAD);
+        let [b, t, _] = tgt.dims();
+        let causal = generate_autoregressive_mask(b, t, &tgt.device());
         let r = TransformerDecoderInput::new(tgt, memory)
+            .target_mask_attn(causal)
             .target_mask_pad(tgt_mask)
             .memory_mask_pad(memory_mask);
         let r = self.transformer_decoder.forward(r);
