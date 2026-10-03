@@ -3728,7 +3728,7 @@ dependencies = [
 
 [[package]]
 name = "neural-machine-translation"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "burn",
  "burn-ndarray",
